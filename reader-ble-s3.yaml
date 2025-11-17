@@ -92,6 +92,10 @@ globals:
     type: bool
     restore_value: yes
     initial_value: "true"
+  - id: coffees_since_last_cleaning
+    type: int32_t
+    restore_value: yes
+    initial_value: "0"
 
 i2c:
   sda: GPIO4
@@ -185,7 +189,15 @@ ble_client:
   - mac_address: ${printer_mac}
     id: printer_ble
     auto_connect: true
-
+    on_connect:
+      then:
+        - script.execute:
+            id: transmit_print
+            message: !lambda "return {0x1b, 0x40};"
+        - delay: 200ms
+        - script.execute:
+            id: transmit_print
+            message: !lambda "return {0x1b, 0x40};"
 script:
   - id: transmit_print
     parameters:
@@ -206,6 +218,10 @@ script:
       name: string
     then:
       - logger.log: "Logging Cleaning Consumption"
+      - script.execute:
+          id: transmit_print
+          message: !lambda "return {0x1b, 0x40};"
+      - script.wait: transmit_print
       - lambda: |-
           size_t name_index = get_name_index(id(names), name);
           if (name_index == -1) {
@@ -240,10 +256,14 @@ script:
             std::string text = " die Maschine. Ehre!\n";
             escpos_data.insert(escpos_data.end(), text.begin(), text.end());
 
+            std::string coffees_text = "Es wurden " + std::to_string(id(coffees_since_last_cleaning)) + " Kaffees seit der letzten Reinigung gemacht.\n";
+            escpos_data.insert(escpos_data.end(), coffees_text.begin(), coffees_text.end());
+
             std::string time2 = id(last_cleaning_time).strftime("Die letzte Reinigung fand am %d.%m.%Y um %H:%M statt.\n");
             escpos_data.insert(escpos_data.end(), time2.begin(), time2.end());
 
             id(last_cleaning_time) = now;
+            id(coffees_since_last_cleaning) = 0;
 
             // ESC a 0 - Left align
             escpos_data.push_back(0x1B);
@@ -267,6 +287,10 @@ script:
           blue: 100%
           flash_length: 500ms
       - logger.log: "Logging Coffee Consumption"
+      - script.execute:
+          id: transmit_print
+          message: !lambda "return {0x1b, 0x40};"
+      - script.wait: transmit_print
       - rtttl.play: "success:d=24,o=5,b=100:c,g,b"
       - lambda: |-
           size_t name_index = get_name_index(id(names), name);
@@ -276,6 +300,7 @@ script:
           }
           id(consumptions)[name_index]++;
           id(total_consumptions) += 1;
+          id(coffees_since_last_cleaning) += 1;
       - script.wait: transmit_print
       - script.execute:
           id: transmit_print
@@ -314,12 +339,20 @@ script:
       - script.wait: transmit_print
       - script.execute:
           id: transmit_print
+          message: !lambda "return {0x1b, 0x40};"
+      - script.wait: transmit_print
+      - script.execute:
+          id: transmit_print
           message: !lambda 'return generate_report("KAFFEE REPORT", id(total_consumptions), "Kaffees", id(names), id(consumptions), id(total_names));'
       - script.wait: transmit_print
 
   - id: print_cleaning_report
     then:
       - logger.log: "Printing cleaning report"
+      - script.wait: transmit_print
+      - script.execute:
+          id: transmit_print
+          message: !lambda "return {0x1b, 0x40};"
       - script.wait: transmit_print
       - script.execute:
           id: transmit_print

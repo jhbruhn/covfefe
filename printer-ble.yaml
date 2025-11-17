@@ -5,7 +5,16 @@ esphome:
       then:
         - uart.write:
             id: printer_uart
+            data: !lambda "return {0xff};"
+        - delay: 50ms
+        - uart.write:
+            id: printer_uart
             data: !lambda "return {0x1b, 0x40};"
+        - delay: 50ms
+        - uart.write:
+            id: printer_uart
+            data: !lambda "return {0x1b, '8', 0, 0};"
+        - delay: 50ms
 
 esp32:
   variant: esp32c3
@@ -31,6 +40,11 @@ uart:
   data_bits: 8
   parity: NONE
   stop_bits: 1
+
+output:
+  - platform: ledc
+    pin: GPIO10
+    id: printer_rts_pin # Renamed to be more explicit
 
 esp32_ble_server:
   manufacturer: "baubs"
