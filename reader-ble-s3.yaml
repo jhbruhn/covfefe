@@ -96,6 +96,13 @@ globals:
     type: int32_t
     restore_value: yes
     initial_value: "0"
+  - id: print_buffer
+    type: std::vector<uint8_t>
+    restore_value: no
+  - id: print_offset
+    type: size_t
+    restore_value: no
+    initial_value: "0"
 
 i2c:
   sda: GPIO4
@@ -206,15 +213,29 @@ script:
       message: uint8_t[]
     mode: single
     then:
-      - logger.log: "Transmitting data"
+      - lambda: |-
+          id(print_buffer) = message;
+          id(print_offset) = 0;
+          ESP_LOGD("BLE", "Transmitting %d bytes in chunks", message.size());
       - delay: 100ms
-      #- ble_client.connect: printer_ble
-      - ble_client.ble_write:
-          id: printer_ble
-          service_uuid: ${print_service_id}
-          characteristic_uuid: ${print_characteristic_id}
-          # List of bytes to write.
-          value: !lambda "return message;"
+      - while:
+          condition:
+            lambda: "return id(print_offset) < id(print_buffer).size();"
+          then:
+            - ble_client.ble_write:
+                id: printer_ble
+                service_uuid: ${print_service_id}
+                characteristic_uuid: ${print_characteristic_id}
+                value: !lambda |-
+                  size_t chunk_size = std::min((size_t)256, id(print_buffer).size() - id(print_offset));
+                  std::vector<uint8_t> chunk(
+                    id(print_buffer).begin() + id(print_offset),
+                    id(print_buffer).begin() + id(print_offset) + chunk_size
+                  );
+                  ESP_LOGD("BLE", "Sending chunk at offset %d, size %d", id(print_offset), chunk_size);
+                  id(print_offset) += chunk_size;
+                  return chunk;
+            - delay: 50ms
       - delay: 50ms
 
   - id: log_cleaning
@@ -226,6 +247,7 @@ script:
           id: transmit_print
           message: !lambda "return {0x1b, 0x40};"
       - script.wait: transmit_print
+      - delay: 200ms
       - lambda: |-
           size_t name_index = get_name_index(id(names), name);
           if (name_index == -1) {
@@ -295,6 +317,7 @@ script:
           id: transmit_print
           message: !lambda "return {0x1b, 0x40};"
       - script.wait: transmit_print
+      - delay: 200ms
       - rtttl.play: "success:d=24,o=5,b=100:c,g,b"
       - lambda: |-
           size_t name_index = get_name_index(id(names), name);
@@ -345,6 +368,7 @@ script:
           id: transmit_print
           message: !lambda "return {0x1b, 0x40};"
       - script.wait: transmit_print
+      - delay: 200ms
       - script.execute:
           id: transmit_print
           message: !lambda 'return generate_report("KAFFEE REPORT", id(total_consumptions), "Kaffees", id(names), id(consumptions), id(cleanings), id(total_names));'
@@ -358,6 +382,7 @@ script:
           id: transmit_print
           message: !lambda "return {0x1b, 0x40};"
       - script.wait: transmit_print
+      - delay: 200ms
       - script.execute:
           id: transmit_print
           message: !lambda 'return generate_cleaning_report("REINIGUNGS REPORT", id(total_cleanings), "Reinigungen", id(names), id(cleanings), id(consumptions), id(cleaning_times), id(total_names));'
