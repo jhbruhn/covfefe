@@ -3,17 +3,24 @@ esphome:
   on_boot:
     - priority: -200
       then:
+        - output.turn_off: printer_rts_pin
+        - delay: 100ms
+        - output.turn_on: printer_rts_pin
+        - delay: 100ms
         - uart.write:
             id: printer_uart
-            data: !lambda "return {0xff};"
+            data: !lambda "return {0x1b, 0x40};"
+        - lambda: id(printer_uart).flush();
         - delay: 50ms
         - uart.write:
             id: printer_uart
             data: !lambda "return {0x1b, 0x40};"
+        - lambda: id(printer_uart).flush();
         - delay: 50ms
         - uart.write:
             id: printer_uart
-            data: !lambda "return {0x1b, '8', 0, 0};"
+            data: !lambda "return {0xff};"
+        - lambda: id(printer_uart).flush();
         - delay: 50ms
 
 esp32:
@@ -40,6 +47,13 @@ uart:
   data_bits: 8
   parity: NONE
   stop_bits: 1
+  debug:
+    direction: BOTH
+    dummy_receiver: true
+    after:
+      timeout: 10ms
+    sequence:
+      - lambda: UARTDebug::log_string(direction, bytes);
 
 output:
   - platform: ledc
@@ -66,10 +80,11 @@ esp32_ble_server:
           on_write:
             then:
               - lambda: |-
-                  ESP_LOGI("BLE", "Descriptor received: %d: %s", id,  format_hex_pretty(x, sizeof(x)).c_str());
+                  ESP_LOGI("BLE", "Descriptor received: %d", id);
               - uart.write:
                   id: printer_uart
                   data: !lambda "return x;"
+              - lambda: id(printer_uart).flush();
 
 # Status LED (optional)
 status_led:

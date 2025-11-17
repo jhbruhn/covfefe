@@ -141,6 +141,7 @@ std::vector<uint8_t> generate_report(const std::string& title, int total_count, 
     escpos_data.push_back(0x64);
     escpos_data.push_back(0x01);
 
+
     return escpos_data;
 }
 
@@ -250,6 +251,7 @@ std::vector<uint8_t> generate_cleaning_report(const std::string& title, int tota
     escpos_data.push_back(0x1B);
     escpos_data.push_back(0x64);
     escpos_data.push_back(0x01);
+
 
     return escpos_data;
 }
