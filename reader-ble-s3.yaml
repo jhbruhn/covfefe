@@ -343,7 +343,7 @@ script:
       - script.wait: transmit_print
       - script.execute:
           id: transmit_print
-          message: !lambda 'return generate_report("KAFFEE REPORT", id(total_consumptions), "Kaffees", id(names), id(consumptions), id(total_names));'
+          message: !lambda 'return generate_report("KAFFEE REPORT", id(total_consumptions), "Kaffees", id(names), id(consumptions), id(cleanings), id(total_names));'
       - script.wait: transmit_print
 
   - id: print_cleaning_report
@@ -356,7 +356,7 @@ script:
       - script.wait: transmit_print
       - script.execute:
           id: transmit_print
-          message: !lambda 'return generate_cleaning_report("REINIGUNGS REPORT", id(total_cleanings), "Reinigungen", id(names), id(cleanings), id(cleaning_times), id(total_names));'
+          message: !lambda 'return generate_cleaning_report("REINIGUNGS REPORT", id(total_cleanings), "Reinigungen", id(names), id(cleanings), id(consumptions), id(cleaning_times), id(total_names));'
       - script.wait: transmit_print
 
 status_led:
