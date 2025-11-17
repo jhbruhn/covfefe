@@ -1,0 +1,332 @@
+esphome:
+  name: covfefe-reader
+  includes:
+    - <log.h>
+    - "log.h"
+
+substitutions:
+  printer_mac: "88:56:A6:63:06:22"
+  consumptions_until_report: 16
+  name_storage_size: 32
+  print_service_id: fa751408-65b2-4505-881e-e0cd1b8f9c2a
+  print_characteristic_id: fb286ed0-e4c6-4da3-a304-f5791f95bf20
+
+esp32:
+  # Use any ESP32 variant you have
+  variant: esp32s3
+  framework:
+    type: esp-idf
+    advanced:
+      compiler_optimization: PERF
+
+# Enable logging
+logger:
+  level: DEBUG
+  baud_rate: 9600
+
+wifi:
+  power_save_mode: none
+  enable_on_boot: True
+  output_power: 8.5
+  ap:
+    ssid: "Covfefe Leser"
+    password: "Computertomograph!"
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Europe/Berlin
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+      - 2.pool.ntp.org
+    on_time:
+      - days_of_week: MON
+        hours: 9
+        minutes: 0
+        seconds: 0
+        then:
+          - script.execute: print_consumption_report
+      - hours: 0
+        minutes: 0
+        seconds: 0
+        then:
+          - lambda: id(new_day) = true;
+
+captive_portal:
+
+globals:
+  - id: consumptions
+    type: std::array<uint32_t, ${name_storage_size}>
+    restore_value: yes
+    initial_value: ""
+  - id: total_consumptions
+    type: int32_t
+    restore_value: yes
+    initial_value: "0"
+  - id: cleanings
+    type: std::array<uint32_t, ${name_storage_size}>
+    restore_value: yes
+    initial_value: ""
+  - id: cleaning_times
+    type: std::array<ESPTime, ${name_storage_size}>
+    restore_value: yes
+    initial_value: ""
+  - id: total_cleanings
+    type: int32_t
+    restore_value: yes
+    initial_value: "0"
+  - id: names
+    type: std::array<NameEntry, ${name_storage_size}>
+    restore_value: yes
+    initial_value: ""
+  - id: total_names
+    type: int32_t
+    restore_value: yes
+    initial_value: "0"
+  - id: last_cleaning_time
+    type: ESPTime
+    restore_value: yes
+    initial_value: ""
+  - id: new_day
+    type: bool
+    restore_value: yes
+    initial_value: "true"
+
+i2c:
+  sda: GPIO4
+  scl: GPIO5
+
+pn532_i2c:
+  update_interval: 1s
+  on_tag:
+    then:
+      - light.turn_off:
+          id: led
+      - lambda: |
+          if (tag.has_ndef_message()) {
+            auto message = tag.get_ndef_message();
+            auto records = message->get_records();
+            for (auto &record : records) {
+              std::string payload = record->get_payload();
+              std::string type = record->get_type();
+
+              if (type == "T") {
+                if (payload == "@@CLEAN@@") {
+                  id(log_cleaning_switch).turn_on();
+                } else if (payload == "@@CONSUMPTIONREPORT@@") {
+                  id(print_consumption_report)->execute();
+                } else if (payload == "@@CLEANINGREPORT@@") {
+                  id(print_cleaning_report)->execute();
+                } else {
+                  if(id(log_cleaning_switch).state) {
+                    id(log_cleaning)->execute(payload);
+                    id(log_cleaning_switch).turn_off();
+                  } else {
+                    id(log_coffee)->execute(payload);
+                  }
+                }
+              }
+            }
+          }
+output:
+  - platform: ledc
+    pin: GPIO9
+    id: buzzer
+
+rtttl:
+  output: buzzer
+
+switch:
+  - platform: template
+    id: log_cleaning_switch
+    optimistic: true
+    turn_on_action:
+      - rtttl.play: "scale_up:d=32,o=5,b=100:c,c#,d#,e,f#,g#,a#,b"
+      - light.turn_on:
+          id: led
+          effect: pulse
+          blue: 100%
+          red: 100%
+          green: 0
+      - delay: 15s
+      - if:
+          condition:
+            switch.is_on: log_cleaning_switch
+          then:
+            - switch.turn_off: log_cleaning_switch
+            - rtttl.play: "scale_up:d=32,o=5,b=100:b,a#,g#,f#,e,d#,c#,c"
+
+    turn_off_action:
+      - light.turn_off:
+          id: led
+
+light:
+  - platform: esp32_rmt_led_strip
+    rgb_order: GRB
+    pin: GPIO10
+    num_leds: 1
+    max_refresh_rate: 16ms
+    chipset: ws2812
+    id: led
+    flash_transition_length: 500ms
+    effects:
+      - pulse:
+          transition_length: 0.5s
+          update_interval: 0.5s
+          min_brightness: 0%
+          max_brightness: 100%
+
+esp32_ble_tracker:
+#  scan_parameters:
+#    continuous: false
+
+ble_client:
+  - mac_address: ${printer_mac}
+    id: printer_ble
+    auto_connect: true
+
+script:
+  - id: transmit_print
+    parameters:
+      message: uint8_t[]
+    mode: single
+    then:
+      - logger.log: "Transmitting data"
+      #- ble_client.connect: printer_ble
+      - ble_client.ble_write:
+          id: printer_ble
+          service_uuid: ${print_service_id}
+          characteristic_uuid: ${print_characteristic_id}
+          # List of bytes to write.
+          value: !lambda "return message;"
+
+  - id: log_cleaning
+    parameters:
+      name: string
+    then:
+      - logger.log: "Logging Cleaning Consumption"
+      - lambda: |-
+          size_t name_index = get_name_index(id(names), name);
+          if (name_index == -1) {
+            name_index = id(total_names)++;
+            id(names)[name_index].set_name(name.c_str());
+          }
+          id(cleanings)[name_index]++;
+          id(cleaning_times)[name_index] = id(sntp_time).now();
+          id(total_cleanings) += 1;
+      - script.wait: transmit_print
+      - script.execute:
+          id: transmit_print
+          message: !lambda |-
+            std::vector<uint8_t> escpos_data;
+
+            // ESC @ - Initialize printer
+            escpos_data.push_back(0x1B);
+            escpos_data.push_back(0x40);
+
+            // ESC a 1 - Center align
+            escpos_data.push_back(0x1B);
+            escpos_data.push_back(0x61);
+            escpos_data.push_back(0x01);
+
+            ESPTime now = id(sntp_time).now();
+
+            std::string time = now.strftime("\nAm %d.%m.%Y um %H:%M reinigte ");
+            escpos_data.insert(escpos_data.end(), time.begin(), time.end());
+
+            escpos_data.insert(escpos_data.end(), name.begin(), name.end());
+
+            std::string text = " die Maschine. Ehre!\n";
+            escpos_data.insert(escpos_data.end(), text.begin(), text.end());
+
+            std::string time2 = id(last_cleaning_time).strftime("Die letzte Reinigung fand am %d.%m.%Y um %H:%M statt.\n");
+            escpos_data.insert(escpos_data.end(), time2.begin(), time2.end());
+
+            id(last_cleaning_time) = now;
+
+            // ESC a 0 - Left align
+            escpos_data.push_back(0x1B);
+            escpos_data.push_back(0x61);
+            escpos_data.push_back(0x00);
+
+            return escpos_data;
+      - rtttl.play: "cantina:d=8,o=5,b=250,b=250:a,p,d6,p,a,p,d6,p,a,d6,p,a,p,g#,4a,a,g#,a,4g,f#,g,f#,4f.,d.,16p,4p.,a,p,d6,p,a,p,d6,p,a,d6,p,a,p,g#,a,p,g,p,4g.,f#,g,p,c6,4a#,4a,4g"
+      - script.wait: transmit_print
+      - script.execute: print_cleaning_report
+
+  - id: log_coffee
+    parameters:
+      name: string
+    then:
+      - light.turn_on:
+          id: led
+          brightness: 100%
+          red: 100%
+          green: 100%
+          blue: 100%
+          flash_length: 500ms
+      - logger.log: "Logging Coffee Consumption"
+      - rtttl.play: "success:d=24,o=5,b=100:c,g,b"
+      - lambda: |-
+          size_t name_index = get_name_index(id(names), name);
+          if (name_index == -1) {
+            name_index = id(total_names)++;
+            id(names)[name_index].set_name(name.c_str());
+          }
+          id(consumptions)[name_index]++;
+          id(total_consumptions) += 1;
+      - script.wait: transmit_print
+      - script.execute:
+          id: transmit_print
+          message: !lambda |-
+            std::vector<uint8_t> escpos_data;
+
+            // ESC @ - Initialize printer
+            escpos_data.push_back(0x1B);
+            escpos_data.push_back(0x40);
+
+            if (id(new_day)) {
+              std::string date = id(sntp_time).now().strftime("%d.%m.%Y:\n");
+              escpos_data.insert(escpos_data.end(), date.begin(), date.end());
+              id(new_day) = false;
+            }
+            std::string time = id(sntp_time).now().strftime("> %H:%M: ");
+            escpos_data.insert(escpos_data.end(), time.begin(), time.end());
+
+            escpos_data.insert(escpos_data.end(), name.begin(), name.end());
+
+            //std::string text = " - 1 Kaffee\n";
+            //escpos_data.insert(escpos_data.end(), text.begin(), text.end());
+
+            return escpos_data;
+
+      - script.wait: transmit_print
+      - if:
+          condition:
+            lambda: "return id(total_consumptions) % ${consumptions_until_report} == 0;"
+          then:
+            - script.execute: print_consumption_report
+
+  - id: print_consumption_report
+    then:
+      - logger.log: "Printing consumption report"
+      - script.wait: transmit_print
+      - script.execute:
+          id: transmit_print
+          message: !lambda 'return generate_report("KAFFEE REPORT", id(total_consumptions), "Kaffees", id(names), id(consumptions), id(total_names));'
+      - script.wait: transmit_print
+
+  - id: print_cleaning_report
+    then:
+      - logger.log: "Printing cleaning report"
+      - script.wait: transmit_print
+      - script.execute:
+          id: transmit_print
+          message: !lambda 'return generate_cleaning_report("REINIGUNGS REPORT", id(total_cleanings), "Reinigungen", id(names), id(cleanings), id(cleaning_times), id(total_names));'
+      - script.wait: transmit_print
+
+status_led:
+  pin:
+    number: GPIO8
+    inverted: true

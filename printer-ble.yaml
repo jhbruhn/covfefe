@@ -1,0 +1,64 @@
+esphome:
+  name: covfefe-printer
+  on_boot:
+    - priority: -200
+      then:
+        - uart.write:
+            id: printer_uart
+            data: !lambda "return {0x1b, 0x40};"
+
+esp32:
+  variant: esp32c3
+  framework:
+    type: esp-idf
+
+substitutions:
+  reader_mac: "88:56:A6:65:1B:C0"
+  print_service_id: fa751408-65b2-4505-881e-e0cd1b8f9c2a
+  print_characteristic_id: fb286ed0-e4c6-4da3-a304-f5791f95bf20
+
+# Enable logging
+logger:
+  level: DEBUG
+  baud_rate: 9600
+
+# UART connection to ESCPOS printer
+uart:
+  id: printer_uart
+  tx_pin: GPIO20 # Adjust based on your wiring
+  rx_pin: GPIO21 # Adjust based on your wiring
+  baud_rate: 9600
+  data_bits: 8
+  parity: NONE
+  stop_bits: 1
+
+esp32_ble_server:
+  manufacturer: "baubs"
+  manufacturer_data: [0x4C, 0, 0x23, 77, 0xF0]
+  on_connect:
+    - lambda: |-
+        ESP_LOGD("BLE", "Connection from %d", id);
+  on_disconnect:
+    - lambda: |-
+        ESP_LOGD("BLE", "Disconnection from %d", id);
+  services:
+    - uuid: ${print_service_id}
+      advertise: true
+      characteristics:
+        - id: print_characteristic
+          uuid: ${print_characteristic_id}
+          description: "Print"
+          write: true
+          on_write:
+            then:
+              - lambda: |-
+                  ESP_LOGI("BLE", "Descriptor received: %d: %s", id,  format_hex_pretty(x, sizeof(x)).c_str());
+              - uart.write:
+                  id: printer_uart
+                  data: !lambda "return x;"
+
+# Status LED (optional)
+status_led:
+  pin:
+    number: GPIO8
+    inverted: true
