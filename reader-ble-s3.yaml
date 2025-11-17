@@ -191,13 +191,15 @@ ble_client:
     auto_connect: true
     on_connect:
       then:
+        - delay: 500ms
         - script.execute:
             id: transmit_print
             message: !lambda "return {0x1b, 0x40};"
-        - delay: 200ms
+        - delay: 500ms
         - script.execute:
             id: transmit_print
             message: !lambda "return {0x1b, 0x40};"
+        - delay: 500ms
 script:
   - id: transmit_print
     parameters:
@@ -205,6 +207,7 @@ script:
     mode: single
     then:
       - logger.log: "Transmitting data"
+      - delay: 100ms
       #- ble_client.connect: printer_ble
       - ble_client.ble_write:
           id: printer_ble
@@ -212,6 +215,7 @@ script:
           characteristic_uuid: ${print_characteristic_id}
           # List of bytes to write.
           value: !lambda "return message;"
+      - delay: 50ms
 
   - id: log_cleaning
     parameters:
