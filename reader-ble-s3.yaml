@@ -6,7 +6,7 @@ esphome:
 
 substitutions:
   printer_mac: "88:56:A6:63:06:22"
-  consumptions_until_report: 16
+  consumptions_until_report: 128
   name_storage_size: 32
   print_service_id: fa751408-65b2-4505-881e-e0cd1b8f9c2a
   print_characteristic_id: fb286ed0-e4c6-4da3-a304-f5791f95bf20
@@ -108,6 +108,10 @@ globals:
     type: int32_t
     restore_value: yes
     initial_value: "0"
+  - id: refill_period_consumptions
+    type: std::array<uint32_t, ${name_storage_size}>
+    restore_value: yes
+    initial_value: ""
   - id: print_buffer
     type: std::vector<uint8_t>
     restore_value: no
@@ -340,9 +344,6 @@ script:
               escpos_data.insert(escpos_data.end(), last_refill.begin(), last_refill.end());
             }
 
-            id(last_refill_time) = now;
-            id(coffees_since_last_refill) = 0;
-
             // ESC a 0 - Left align
             escpos_data.push_back(0x1B);
             escpos_data.push_back(0x61);
@@ -350,6 +351,21 @@ script:
 
             return escpos_data;
       - script.wait: transmit_print
+      - if:
+          condition:
+            lambda: "return id(coffees_since_last_refill) > 0;"
+          then:
+            - script.execute:
+                id: transmit_print
+                message: !lambda 'return generate_report("NACHFUELLUNGS-PERIODE", id(coffees_since_last_refill), "Kaffees", id(names), id(refill_period_consumptions), id(cleanings), id(total_names));'
+            - script.wait: transmit_print
+      - lambda: |-
+          // Reset refill period tracking
+          id(last_refill_time) = id(sntp_time).now();
+          id(coffees_since_last_refill) = 0;
+          for (size_t i = 0; i < id(refill_period_consumptions).size(); i++) {
+            id(refill_period_consumptions)[i] = 0;
+          }
 
   - id: log_coffee
     parameters:
@@ -376,6 +392,7 @@ script:
             id(names)[name_index].set_name(name.c_str());
           }
           id(consumptions)[name_index]++;
+          id(refill_period_consumptions)[name_index]++;
           id(total_consumptions) += 1;
           id(coffees_since_last_cleaning) += 1;
           id(coffees_since_last_refill) += 1;
