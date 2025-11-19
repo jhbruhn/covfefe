@@ -72,6 +72,10 @@ globals:
     type: std::array<ESPTime, ${name_storage_size}>
     restore_value: yes
     initial_value: ""
+  - id: consumption_times
+    type: std::array<ESPTime, ${name_storage_size}>
+    restore_value: yes
+    initial_value: ""
   - id: total_cleanings
     type: int32_t
     restore_value: yes
@@ -210,6 +214,139 @@ esp32_ble_tracker:
 #  scan_parameters:
 #    continuous: false
 
+esp32_ble_server:
+  manufacturer: "Covfefe"
+  model: "Coffee Reader BLE-S3"
+  services:
+    - uuid: 'c0ffee00-0000-1000-8000-00805f9b34fb'
+      advertise: true
+      characteristics:
+        # Total coffee consumptions
+        - id: ble_total_consumptions
+          uuid: 'c0ffee01-0000-1000-8000-00805f9b34fb'
+          description: "Total Coffee Consumptions"
+          read: true
+          notify: true
+          value:
+            data: !lambda |-
+              return bytebuffer::ByteBuffer::wrap((uint32_t)id(total_consumptions)).get_data();
+        
+        # Total cleanings
+        - id: ble_total_cleanings
+          uuid: 'c0ffee02-0000-1000-8000-00805f9b34fb'
+          description: "Total Cleanings"
+          read: true
+          notify: true
+          value:
+            data: !lambda |-
+              return bytebuffer::ByteBuffer::wrap((uint32_t)id(total_cleanings)).get_data();
+        
+        # Total refills
+        - id: ble_total_refills
+          uuid: 'c0ffee03-0000-1000-8000-00805f9b34fb'
+          description: "Total Refills"
+          read: true
+          notify: true
+          value:
+            data: !lambda |-
+              return bytebuffer::ByteBuffer::wrap((uint32_t)id(total_refills)).get_data();
+        
+        # Coffees since last cleaning
+        - id: ble_coffees_since_cleaning
+          uuid: 'c0ffee04-0000-1000-8000-00805f9b34fb'
+          description: "Coffees Since Last Cleaning"
+          read: true
+          notify: true
+          value:
+            data: !lambda |-
+              return bytebuffer::ByteBuffer::wrap((uint32_t)id(coffees_since_last_cleaning)).get_data();
+        
+        # Coffees since last refill
+        - id: ble_coffees_since_refill
+          uuid: 'c0ffee05-0000-1000-8000-00805f9b34fb'
+          description: "Coffees Since Last Refill"
+          read: true
+          notify: true
+          value:
+            data: !lambda |-
+              return bytebuffer::ByteBuffer::wrap((uint32_t)id(coffees_since_last_refill)).get_data();
+        
+        # Total registered users
+        - id: ble_total_users
+          uuid: 'c0ffee06-0000-1000-8000-00805f9b34fb'
+          description: "Total Registered Users"
+          read: true
+          notify: true
+          value:
+            data: !lambda |-
+              return bytebuffer::ByteBuffer::wrap((uint32_t)id(total_names)).get_data();
+        
+        # Coffee consumption leaderboard
+        # Format: [count:4][karma:4][timestamp:4][name_len:1][name:name_len]...
+        # Sorted by consumption count (descending)
+        - id: ble_consumption_leaderboard
+          uuid: 'c0ffee07-0000-1000-8000-00805f9b34fb'
+          description: "Coffee Consumption Leaderboard"
+          read: true
+          value:
+            data: !lambda |-
+              auto leaderboard = build_leaderboard(
+                id(names), 
+                id(consumptions), 
+                id(consumptions), 
+                id(cleanings),
+                id(consumption_times),
+                id(total_names)
+              );
+              return encode_leaderboard_binary(leaderboard);
+        
+        # Cleaning leaderboard
+        # Format: [count:4][karma:4][timestamp:4][name_len:1][name:name_len]...
+        # Sorted by cleaning count (descending)
+        - id: ble_cleaning_leaderboard
+          uuid: 'c0ffee08-0000-1000-8000-00805f9b34fb'
+          description: "Cleaning Leaderboard"
+          read: true
+          value:
+            data: !lambda |-
+              auto leaderboard = build_leaderboard(
+                id(names), 
+                id(cleanings), 
+                id(consumptions), 
+                id(cleanings),
+                id(cleaning_times),
+                id(total_names)
+              );
+              return encode_leaderboard_binary(leaderboard);
+        
+        # Last cleaning timestamp (Unix epoch)
+        - id: ble_last_cleaning_time
+          uuid: 'c0ffee09-0000-1000-8000-00805f9b34fb'
+          description: "Last Cleaning Timestamp"
+          read: true
+          notify: true
+          value:
+            data: !lambda |-
+              uint32_t timestamp = 0;
+              if (id(last_cleaning_time).is_valid()) {
+                timestamp = id(last_cleaning_time).timestamp;
+              }
+              return bytebuffer::ByteBuffer::wrap(timestamp).get_data();
+        
+        # Last refill timestamp (Unix epoch)
+        - id: ble_last_refill_time
+          uuid: 'c0ffee0a-0000-1000-8000-00805f9b34fb'
+          description: "Last Refill Timestamp"
+          read: true
+          notify: true
+          value:
+            data: !lambda |-
+              uint32_t timestamp = 0;
+              if (id(last_refill_time).is_valid()) {
+                timestamp = id(last_refill_time).timestamp;
+              }
+              return bytebuffer::ByteBuffer::wrap(timestamp).get_data();
+
 ble_client:
   - mac_address: ${printer_mac}
     id: printer_ble
@@ -261,6 +398,11 @@ script:
           id(cleanings)[name_index]++;
           id(cleaning_times)[name_index] = id(sntp_time).now();
           id(total_cleanings) += 1;
+      # Notify BLE clients of updated values
+      - ble_server.characteristic.notify:
+          id: ble_total_cleanings
+      - ble_server.characteristic.notify:
+          id: ble_last_cleaning_time
       - script.wait: transmit_print
       - script.execute:
           id: transmit_print
@@ -310,6 +452,9 @@ script:
       - rtttl.play: "two_short:d=4,o=5,b=100:16e6,16e6"
       - lambda: |-
           id(total_refills) += 1;
+      # Notify BLE clients of updated values
+      - ble_server.characteristic.notify:
+          id: ble_total_refills
       - script.wait: transmit_print
       - script.execute:
           id: transmit_print
@@ -357,7 +502,7 @@ script:
           then:
             - script.execute:
                 id: transmit_print
-                message: !lambda 'return generate_report("NACHFUELLUNGS-PERIODE", id(coffees_since_last_refill), "Kaffees", id(names), id(refill_period_consumptions), id(cleanings), id(total_names));'
+                message: !lambda 'return generate_report("NACHFUELLUNGS-PERIODE", id(coffees_since_last_refill), "Kaffees", id(names), id(refill_period_consumptions), id(cleanings), id(consumption_times), id(total_names));'
             - script.wait: transmit_print
       - lambda: |-
           // Reset refill period tracking
@@ -366,6 +511,11 @@ script:
           for (size_t i = 0; i < id(refill_period_consumptions).size(); i++) {
             id(refill_period_consumptions)[i] = 0;
           }
+      # Notify BLE clients of updated values
+      - ble_server.characteristic.notify:
+          id: ble_last_refill_time
+      - ble_server.characteristic.notify:
+          id: ble_coffees_since_refill
 
   - id: log_coffee
     parameters:
@@ -392,10 +542,18 @@ script:
             id(names)[name_index].set_name(name.c_str());
           }
           id(consumptions)[name_index]++;
+          id(consumption_times)[name_index] = id(sntp_time).now();
           id(refill_period_consumptions)[name_index]++;
           id(total_consumptions) += 1;
           id(coffees_since_last_cleaning) += 1;
           id(coffees_since_last_refill) += 1;
+      # Notify BLE clients of updated values
+      - ble_server.characteristic.notify:
+          id: ble_total_consumptions
+      - ble_server.characteristic.notify:
+          id: ble_coffees_since_cleaning
+      - ble_server.characteristic.notify:
+          id: ble_coffees_since_refill
       - script.wait: transmit_print
       - script.execute:
           id: transmit_print
@@ -434,7 +592,7 @@ script:
       - script.wait: transmit_print
       - script.execute:
           id: transmit_print
-          message: !lambda 'return generate_report("KAFFEE REPORT", id(total_consumptions), "Kaffees", id(names), id(consumptions), id(cleanings), id(total_names));'
+          message: !lambda 'return generate_report("KAFFEE REPORT", id(total_consumptions), "Kaffees", id(names), id(consumptions), id(cleanings), id(consumption_times), id(total_names));'
       - script.wait: transmit_print
 
   - id: print_cleaning_report

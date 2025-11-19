@@ -8,6 +8,13 @@
 #include <utility>
 #include <cstring>
 
+// Calculate karma score for a person
+// Formula: (cleanings * 10) - (coffees * 0.5)
+// This rewards cleaning heavily and slightly penalizes consumption
+inline float calculate_karma(uint32_t coffees, uint32_t cleanings) {
+    return (static_cast<float>(cleanings) * 10.0f) - (static_cast<float>(coffees) * 0.5f);
+}
+
 struct NameEntry {
     std::array<char, 32> name;  // Fixed-size string buffer
 
@@ -35,12 +42,83 @@ int get_name_index(const std::array<NameEntry, N>& names, std::string_view searc
     return -1;  // Not found
 }
 
-// Calculate karma score for a person
-// Formula: (cleanings * 10) - (coffees * 0.5)
-// This rewards cleaning heavily and slightly penalizes consumption
-inline float calculate_karma(uint32_t coffees, uint32_t cleanings) {
-    return (static_cast<float>(cleanings) * 10.0f) - (static_cast<float>(coffees) * 0.5f);
+// Leaderboard entry structure used across reports and BLE
+struct LeaderboardEntry {
+    std::string name;
+    uint32_t count;
+    float karma;
+    uint32_t timestamp;  // Unix epoch
+};
+
+// Build and sort leaderboard with timestamps from names and data arrays
+// Returns a vector of LeaderboardEntry sorted by count (descending)
+template<size_t N>
+std::vector<LeaderboardEntry> build_leaderboard(
+    const std::array<NameEntry, N>& names,
+    const std::array<uint32_t, N>& data,
+    const std::array<uint32_t, N>& consumptions,
+    const std::array<uint32_t, N>& cleanings,
+    const std::array<esphome::ESPTime, N>& times,
+    int total_names
+) {
+    std::vector<LeaderboardEntry> leaderboard;
+    
+    for (int i = 0; i < total_names; i++) {
+        std::string name(names[i].get_name());
+        if (!name.empty() && data[i] > 0) {
+            float karma = calculate_karma(consumptions[i], cleanings[i]);
+            uint32_t timestamp = times[i].is_valid() ? times[i].timestamp : 0;
+            leaderboard.push_back({name, data[i], karma, timestamp});
+        }
+    }
+    
+    // Sort by count (descending)
+    std::sort(leaderboard.begin(), leaderboard.end(),
+        [](const LeaderboardEntry& a, const LeaderboardEntry& b) { 
+            return a.count > b.count; 
+        });
+    
+    return leaderboard;
 }
+
+// Encode leaderboard with timestamps as binary data for BLE transmission
+// Format: [count:4][karma:4][timestamp:4][name_len:1][name:name_len] per entry
+inline std::vector<uint8_t> encode_leaderboard_binary(const std::vector<LeaderboardEntry>& leaderboard) {
+    std::vector<uint8_t> result;
+    
+    for (const auto& entry : leaderboard) {
+        // Add count (4 bytes, little-endian)
+        result.push_back(entry.count & 0xFF);
+        result.push_back((entry.count >> 8) & 0xFF);
+        result.push_back((entry.count >> 16) & 0xFF);
+        result.push_back((entry.count >> 24) & 0xFF);
+        
+        // Add karma (4 bytes, as float)
+        uint32_t karma_bits;
+        memcpy(&karma_bits, &entry.karma, sizeof(float));
+        result.push_back(karma_bits & 0xFF);
+        result.push_back((karma_bits >> 8) & 0xFF);
+        result.push_back((karma_bits >> 16) & 0xFF);
+        result.push_back((karma_bits >> 24) & 0xFF);
+        
+        // Add timestamp (4 bytes, little-endian)
+        result.push_back(entry.timestamp & 0xFF);
+        result.push_back((entry.timestamp >> 8) & 0xFF);
+        result.push_back((entry.timestamp >> 16) & 0xFF);
+        result.push_back((entry.timestamp >> 24) & 0xFF);
+        
+        // Add name length (1 byte)
+        uint8_t name_len = std::min((size_t)255, entry.name.length());
+        result.push_back(name_len);
+        
+        // Add name bytes
+        result.insert(result.end(), entry.name.begin(), entry.name.begin() + name_len);
+    }
+    
+    return result;
+}
+
+
 
 // Generate complete report with header, leaderboard, and footer
 template<size_t N>
@@ -48,6 +126,7 @@ std::vector<uint8_t> generate_report(const std::string& title, int total_count, 
                                       const std::array<NameEntry, N>& names,
                                       const std::array<uint32_t, N>& data,
                                       const std::array<uint32_t, N>& cleanings,
+                                      const std::array<esphome::ESPTime, N>& consumption_times,
                                       int total_names) {
     std::vector<uint8_t> escpos_data;
 
@@ -87,25 +166,8 @@ std::vector<uint8_t> generate_report(const std::string& title, int total_count, 
     std::string scope_line = "Leaderboard:\n\n";
     escpos_data.insert(escpos_data.end(), scope_line.begin(), scope_line.end());
 
-    // Build leaderboard from names and counts with karma
-    struct LeaderboardEntry {
-        std::string name;
-        uint32_t count;
-        float karma;
-    };
-    std::vector<LeaderboardEntry> leaderboard;
-
-    for (int i = 0; i < total_names; i++) {
-        std::string name(names[i].get_name());
-        if (!name.empty() && data[i] > 0) {
-            float karma = calculate_karma(data[i], cleanings[i]);
-            leaderboard.push_back({name, data[i], karma});
-        }
-    }
-
-    // Sort by count (descending) to create leaderboard
-    std::sort(leaderboard.begin(), leaderboard.end(),
-        [](const auto& a, const auto& b) { return a.count > b.count; });
+    // Build leaderboard using the reusable function
+    auto leaderboard = build_leaderboard(names, data, data, cleanings, consumption_times, total_names);
 
     // Build complete leaderboard
     int rank = 1;
@@ -191,30 +253,12 @@ std::vector<uint8_t> generate_cleaning_report(const std::string& title, int tota
     std::string scope_line = "Leaderboard:\n\n";
     escpos_data.insert(escpos_data.end(), scope_line.begin(), scope_line.end());
 
-    // Build leaderboard from names, counts, times, and karma
-    struct LeaderboardEntry {
-        std::string name;
-        uint32_t count;
-        esphome::ESPTime time;
-        float karma;
-    };
-    std::vector<LeaderboardEntry> leaderboard;
-
-    for (int i = 0; i < total_names; i++) {
-        std::string name(names[i].get_name());
-        if (!name.empty() && data[i] > 0) {
-            float karma = calculate_karma(consumptions[i], data[i]);
-            leaderboard.push_back({name, data[i], times[i], karma});
-        }
-    }
-
-    // Sort by count (descending) to create leaderboard
-    std::sort(leaderboard.begin(), leaderboard.end(),
-        [](const auto& a, const auto& b) { return a.count > b.count; });
+    // Build leaderboard using the reusable function
+    auto leaderboard = build_leaderboard(names, data, consumptions, data, times, total_names);
 
     // Build complete leaderboard with timestamps
     int rank = 1;
-    for (auto& entry : leaderboard) {
+    for (const auto& entry : leaderboard) {
         std::string line = std::to_string(rank) + ". " + entry.name + ": " + std::to_string(entry.count);
         escpos_data.insert(escpos_data.end(), line.begin(), line.end());
 
@@ -225,9 +269,17 @@ std::vector<uint8_t> generate_cleaning_report(const std::string& title, int tota
         escpos_data.insert(escpos_data.end(), karma_str.begin(), karma_str.end());
 
         // Add last cleaning time if available
-        if (entry.time.is_valid()) {
-            std::string time_str = entry.time.strftime("\n   Zuletzt: %d.%m.%Y %H:%M");
-            escpos_data.insert(escpos_data.end(), time_str.begin(), time_str.end());
+        // Find the index for this name to get the timestamp
+        for (int i = 0; i < total_names; i++) {
+            if (std::string(names[i].get_name()) == entry.name) {
+                if (times[i].is_valid()) {
+                    // Make a mutable copy for strftime
+                    esphome::ESPTime time_copy = times[i];
+                    std::string time_str = time_copy.strftime("\n   Zuletzt: %d.%m.%Y %H:%M");
+                    escpos_data.insert(escpos_data.end(), time_str.begin(), time_str.end());
+                }
+                break;
+            }
         }
 
         escpos_data.push_back('\n');
