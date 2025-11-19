@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'services/nfc_writer_service.dart';
 import 'screens/write_card_screen.dart';
 import 'screens/read_card_screen.dart';
+import 'screens/statistics_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -163,34 +164,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildStatisticsScreen() {
-    final colorScheme = Theme.of(context).colorScheme;
-
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.bar_chart, size: 80, color: colorScheme.outline),
-            const SizedBox(height: 24),
-            Text(
-              'Statistics',
-              style: Theme.of(
-                context,
-              ).textTheme.headlineSmall?.copyWith(color: colorScheme.onSurface),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Statistics functionality coming soon',
-              style: TextStyle(
-                fontSize: 16,
-                color: colorScheme.onSurfaceVariant,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      ),
-    );
+    return const StatisticsScreen();
   }
 }
