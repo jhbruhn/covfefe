@@ -31,6 +31,8 @@ wifi:
   ap:
     ssid: "Covfefe Leser"
     password: "Computertomograph!"
+  on_connect:
+    - component.update: http_firmware_update
 
 time:
   - platform: sntp
@@ -213,6 +215,25 @@ light:
 esp32_ble_tracker:
 #  scan_parameters:
 #    continuous: false
+
+ota:
+  - platform: http_request
+
+http_request:
+
+update:
+  - platform: http_request
+    name: Firmware Update
+    id: http_firmware_update
+    source: https://jhbruhn.github.io/covfefe/firmware/covfefe-reader.manifest.json
+    on_update_available:
+      - light.turn_on:
+          id: led
+          effect: pulse
+          blue: 100%
+          red: 0
+          green: 0
+      - update.perform:
 
 esp32_ble_server:
   manufacturer: "Covfefe"
