@@ -18,6 +18,9 @@ class CoffeeStatistics {
   final List<LeaderboardEntry> consumptionLeaderboard;
   final List<LeaderboardEntry> cleaningLeaderboard;
 
+  // Metadata
+  final bool isCached;
+
   CoffeeStatistics({
     this.totalConsumptions = 0,
     this.totalCleanings = 0,
@@ -29,6 +32,7 @@ class CoffeeStatistics {
     this.lastRefillTime,
     this.consumptionLeaderboard = const [],
     this.cleaningLeaderboard = const [],
+    this.isCached = false,
   });
 
   /// Create an empty statistics object
@@ -48,6 +52,7 @@ class CoffeeStatistics {
     DateTime? lastRefillTime,
     List<LeaderboardEntry>? consumptionLeaderboard,
     List<LeaderboardEntry>? cleaningLeaderboard,
+    bool? isCached,
   }) {
     return CoffeeStatistics(
       totalConsumptions: totalConsumptions ?? this.totalConsumptions,
@@ -60,6 +65,7 @@ class CoffeeStatistics {
       lastRefillTime: lastRefillTime ?? this.lastRefillTime,
       consumptionLeaderboard: consumptionLeaderboard ?? this.consumptionLeaderboard,
       cleaningLeaderboard: cleaningLeaderboard ?? this.cleaningLeaderboard,
+      isCached: isCached ?? this.isCached,
     );
   }
 

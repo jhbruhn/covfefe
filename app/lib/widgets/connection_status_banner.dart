@@ -71,6 +71,12 @@ class ConnectionStatusBanner extends StatelessWidget {
           if (connectionState == BleConnectionState.disconnected && onRetry != null)
             TextButton(
               onPressed: onRetry,
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
               child: Text(
                 'Retry',
                 style: TextStyle(color: textColor),
