@@ -1,7 +1,7 @@
 esphome:
   name: covfefe-printer
   project:
-    name: covfefe-printer
+    name: baubs.covfefe-printer
     version: dev # This will be replaced by the github workflows with the `release` version
   on_boot:
     - priority: -200
