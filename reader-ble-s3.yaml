@@ -3,7 +3,9 @@ esphome:
   includes:
     - <log.h>
     - "log.h"
-
+  project:
+    version: dev # This will be replaced by the github workflows with the `release` version
+    
 substitutions:
   printer_mac: "88:56:A6:63:06:22"
   consumptions_until_report: 128
