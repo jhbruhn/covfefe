@@ -4,6 +4,7 @@ esphome:
     - <log.h>
     - "log.h"
   project:
+    name: covfefe-reader
     version: dev # This will be replaced by the github workflows with the `release` version
     
 substitutions:
