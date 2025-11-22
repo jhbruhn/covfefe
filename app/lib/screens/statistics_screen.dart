@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/coffee_statistics.dart';
+import '../models/statistic_type.dart';
 import '../services/ble_statistics_service.dart';
+import '../services/statistics_persistence_service.dart';
+import '../screens/statistics_history_screen.dart';
 import '../widgets/connection_status_banner.dart';
 import '../widgets/statistic_card.dart';
 import '../widgets/leaderboard_list_item.dart';
 
-/// Statistics screen displaying coffee consumption data from BLE
+/// Statistics screen displaying coffee consumption data
+/// Data flows: BLE → PersistenceService (single source of truth) → UI
 class StatisticsScreen extends StatefulWidget {
   const StatisticsScreen({super.key});
 
@@ -16,6 +20,7 @@ class StatisticsScreen extends StatefulWidget {
 
 class _StatisticsScreenState extends State<StatisticsScreen> with SingleTickerProviderStateMixin {
   final BleStatisticsService _bleService = BleStatisticsService();
+  late StatisticsPersistenceService _persistenceService;
   late TabController _tabController;
   
   CoffeeStatistics _statistics = CoffeeStatistics.empty();
@@ -26,7 +31,10 @@ class _StatisticsScreenState extends State<StatisticsScreen> with SingleTickerPr
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
     
-    // Listen to connection state changes
+    // Initialize persistence service (single source of truth for statistics)
+    _persistenceService = StatisticsPersistenceService(_bleService);
+    
+    // Listen to connection state changes from BLE service
     _bleService.connectionStateStream.listen((state) {
       if (mounted) {
         setState(() {
@@ -35,8 +43,9 @@ class _StatisticsScreenState extends State<StatisticsScreen> with SingleTickerPr
       }
     });
     
-    // Listen to statistics updates
-    _bleService.statisticsStream.listen((statistics) {
+    // Listen to statistics updates from PERSISTENCE SERVICE (not BLE directly)
+    // This stream combines database values with live BLE data (leaderboards, timestamps)
+    _persistenceService.statisticsStream.listen((statistics) {
       if (mounted) {
         setState(() {
           _statistics = statistics;
@@ -51,6 +60,7 @@ class _StatisticsScreenState extends State<StatisticsScreen> with SingleTickerPr
   @override
   void dispose() {
     _tabController.dispose();
+    _persistenceService.dispose();
     _bleService.dispose();
     super.dispose();
   }
@@ -59,22 +69,18 @@ class _StatisticsScreenState extends State<StatisticsScreen> with SingleTickerPr
     await _bleService.startScanning();
   }
 
-  Future<void> _refresh() async {
-    _bleService.disconnect();
-    await Future.delayed(const Duration(milliseconds: 500));
-    _connect();
-  }
+
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
 
     return Scaffold(
-      body: RefreshIndicator(
-        onRefresh: _refresh,
-        child: CustomScrollView(
-          slivers: [
-            // Connection status banner
+
+      body: CustomScrollView(
+        slivers: [
+          // Connection status banner
+          if (_connectionState != BleConnectionState.connected)
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
@@ -85,23 +91,29 @@ class _StatisticsScreenState extends State<StatisticsScreen> with SingleTickerPr
               ),
             ),
 
-            // Loading or content
-            if (_connectionState == BleConnectionState.connected)
-              ..._buildConnectedContent(colorScheme)
-            else
-              _buildDisconnectedContent(colorScheme),
-          ],
-        ),
+          // Loading or content
+          if (_connectionState == BleConnectionState.connected || _hasData)
+            ..._buildConnectedContent(colorScheme)
+          else
+            _buildDisconnectedContent(colorScheme),
+        ],
       ),
     );
   }
+
+  bool get _hasData => 
+      _statistics.isCached || 
+      _statistics.totalConsumptions > 0 || 
+      _statistics.totalCleanings > 0 || 
+      _statistics.totalRefills > 0 ||
+      _statistics.totalUsers > 0;
 
   List<Widget> _buildConnectedContent(ColorScheme colorScheme) {
     return [
       // Overall statistics section
       SliverToBoxAdapter(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+          padding: const EdgeInsets.fromLTRB(16.0, 16.0, 16.0, 0.0),
           child: Text(
             'Overall Statistics',
             style: Theme.of(context).textTheme.titleLarge?.copyWith(
@@ -129,24 +141,32 @@ class _StatisticsScreenState extends State<StatisticsScreen> with SingleTickerPr
               label: 'Total Coffees',
               value: '${_statistics.totalConsumptions}',
               iconColor: Colors.brown,
+              onTap: () => _navigateToHistory(StatisticType.totalCoffees),
+              isCached: _statistics.isCached,
             ),
             StatisticCard(
               icon: Icons.cleaning_services,
               label: 'Total Cleanings',
               value: '${_statistics.totalCleanings}',
               iconColor: Colors.blue,
+              onTap: () => _navigateToHistory(StatisticType.totalCleanings),
+              isCached: _statistics.isCached,
             ),
             StatisticCard(
               icon: Icons.water_drop,
               label: 'Total Refills',
               value: '${_statistics.totalRefills}',
               iconColor: Colors.cyan,
+              onTap: () => _navigateToHistory(StatisticType.totalRefills),
+              isCached: _statistics.isCached,
             ),
             StatisticCard(
               icon: Icons.people,
               label: 'Total Users',
               value: '${_statistics.totalUsers}',
               iconColor: Colors.purple,
+              onTap: () => _navigateToHistory(StatisticType.totalUsers),
+              isCached: _statistics.isCached,
             ),
           ]),
         ),
@@ -175,76 +195,24 @@ class _StatisticsScreenState extends State<StatisticsScreen> with SingleTickerPr
           child: Row(
             children: [
               Expanded(
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(Icons.coffee, color: colorScheme.primary, size: 20),
-                            const SizedBox(width: 8),
-                            Text(
-                              'Since Cleaning',
-                              style: Theme.of(context).textTheme.titleSmall,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '${_statistics.coffeesSinceCleaning}',
-                          style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          _formatTimestamp(_statistics.lastCleaningTime),
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: colorScheme.onSurfaceVariant,
-                              ),
-                        ),
-                      ],
-                    ),
-                  ),
+                child: _MaintenanceCard(
+                  title: 'Since Cleaning',
+                  value: '${_statistics.coffeesSinceCleaning}',
+                  subtitle: _formatTimestamp(_statistics.lastCleaningTime),
+                  icon: Icons.coffee,
+                  isCached: _statistics.isCached,
+                  onTap: () => _navigateToHistory(StatisticType.coffeesSinceCleaning),
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(Icons.water_drop, color: colorScheme.primary, size: 20),
-                            const SizedBox(width: 8),
-                            Text(
-                              'Since Refill',
-                              style: Theme.of(context).textTheme.titleSmall,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '${_statistics.coffeesSinceRefill}',
-                          style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          _formatTimestamp(_statistics.lastRefillTime),
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: colorScheme.onSurfaceVariant,
-                              ),
-                        ),
-                      ],
-                    ),
-                  ),
+                child: _MaintenanceCard(
+                  title: 'Since Refill',
+                  value: '${_statistics.coffeesSinceRefill}',
+                  subtitle: _formatTimestamp(_statistics.lastRefillTime),
+                  icon: Icons.water_drop,
+                  isCached: _statistics.isCached,
+                  onTap: () => _navigateToHistory(StatisticType.coffeesSinceRefill),
                 ),
               ),
             ],
@@ -393,5 +361,91 @@ class _StatisticsScreenState extends State<StatisticsScreen> with SingleTickerPr
       return 'Never';
     }
     return 'Last: ${DateFormat('MMM d, HH:mm').format(timestamp)}';
+  }
+
+  void _navigateToHistory(StatisticType type) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => StatisticsHistoryScreen(
+          statisticType: type,
+          persistenceService: _persistenceService,
+        ),
+      ),
+    );
+  }
+}
+
+class _MaintenanceCard extends StatelessWidget {
+  final String title;
+  final String value;
+  final String subtitle;
+  final IconData icon;
+  final bool isCached;
+  final VoidCallback? onTap;
+
+  const _MaintenanceCard({
+    required this.title,
+    required this.value,
+    required this.subtitle,
+    required this.icon,
+    this.isCached = false,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final effectiveIconColor = isCached ? colorScheme.outline : colorScheme.primary;
+    final contentOpacity = isCached ? 0.6 : 1.0;
+
+    return Card(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Opacity(
+            opacity: contentOpacity,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(icon, color: effectiveIconColor, size: 20),
+                    const SizedBox(width: 8),
+                    Text(
+                      title,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    if (isCached) ...[
+                      const Spacer(),
+                      Icon(
+                        Icons.history,
+                        size: 16,
+                        color: colorScheme.outline,
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  value,
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
